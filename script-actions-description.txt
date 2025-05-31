@@ -1,0 +1,141 @@
+This script includes:
+
+Imports: All requested libraries are imported.
+Logging: Configured to append to financial_log.txt with the specified format.
+File Uploader: st.file_uploader allows users to upload .xlsx files.
+Sheet Parsing:
+pd.ExcelFile is used to access sheets by name.
+find_header_row_index function attempts to find the first non-empty row to use as headers.
+Data is loaded using pd.read_excel with the detected header row and index_col=0.
+Index and column names are cleaned (stripped of whitespace).
+Rows with NaN or empty string indices are dropped.
+Validation:
+validate_dataframe_structure checks for the presence of KEY_ROWS_TO_VALIDATE.
+It also checks for at least MIN_MONTHLY_COLUMNS (e.g., 'Jan 20') and a 'TOTAL' column.
+Invalid sheets trigger a warning in Streamlit and a log entry, and are then skipped.
+Data Storage: Valid DataFrames are stored in the valid_dataframes dictionary.
+Debugging and Logging: Includes print() statements for console debugging and logging calls for persistent logs. Detailed comments explain the code.
+Error Handling: try-except blocks are used to catch potential errors during file processing and data loading.
+You can save this code as app.py and run it using streamlit run app.py in your terminal (once you have Streamlit and the other libraries installed). Remember to have an Excel file ready for testing that matches the described structure.
+
+---------------------------------------------------------------------------------------------
+
+It appears the main issue is how the DataFrame's index is being set, which leads to most rows being discarded and key financial rows not being found. The provided CSV shows a hierarchical structure where item descriptions (like "Total Income", "40000 · Sales") are indented across several columns, rather than being in a single, consistent first column.
+
+The current index_col=0 likely points to an almost entirely empty physical column in your Excel sheet, causing the dropna methods to remove most data, resulting in a DataFrame shape like (1, 19).
+
+Here's a revised approach to construct the DataFrame index by coalescing descriptions from the leading columns:
+
+Read the sheet data without initially setting an index_col.
+Identify the actual data columns (e.g., 'Jan 20', 'Feb 20', ..., 'TOTAL').
+The columns to the left of these data columns contain the hierarchical descriptions.
+For each row, extract the last non-empty string from these description columns to form the new index.
+Proceed with cleaning and validation.
+I'll provide the necessary modifications to your app.py.
+
+First, let's define a helper function (you can place this with your other helper functions like find_header_row_index
+
+
+Explanation of Changes:
+
+get_proper_index_from_row(row_series) function:
+
+This new helper function takes a row of description columns.
+It iterates through the values in that row and returns the last string value that is not null or purely whitespace. This typically corresponds to the most specific account name or total in your hierarchical structure.
+Modified Data Loading in main():
+
+df_full = pd.read_excel(...): Reads the sheet with the identified header row but without index_col. This loads all columns, including the leading ones that contain your item descriptions.
+Identify Data Columns: The code now tries to find the first column that looks like a month (e.g., 'Jan 20') or 'TOTAL'. This marks the beginning of your numerical data.
+desc_cols_df = df_full.iloc[:, :first_data_col_loc]: Slices df_full to get only the description columns (those to the left of the first data column).
+data_cols_df = df_full.iloc[:, first_data_col_loc:]: Slices df_full to get only the data columns.
+new_index = desc_cols_df.apply(get_proper_index_from_row, axis=1): Applies the helper function to each row of desc_cols_df to generate the new, proper index.
+df = data_cols_df.copy(): Creates the main DataFrame df using only the numerical data columns.
+df.index = new_index: Assigns the generated hierarchical index.
+Cleaning: The column name cleaning remains. The index cleaning is now implicitly handled by get_proper_index_from_row and the subsequent df = df[pd.notna(df.index) & (df.index != '')].
+With these changes, df.index should now correctly contain the textual descriptions like "Total Income", "Gross Profit", etc., allowing validate_dataframe_structure to find them. The shape of your DataFrame df should also reflect the actual number of financial line items rather than just one row.
+
+
+------------------------------------------------------------------------
+
+Okay, the "Proforma results (next month forecast)" table you're seeing for each year (e.g., "Proforma for: 2020") is a summary of the financial projections and analysis for the single month immediately following the last month of data in that year's sheet.
+
+Here's a breakdown of what each column in that table tells you:
+
+1. Date:
+
+This is the specific date for which the forecast is made. For example, if the "2020" sheet contains data up to "Dec 20" (December 2020), this date will be "2021-01-01" (January 1, 2021). It represents the next month.
+Total Income:
+
+This is the forecasted total income for that next month. It's predicted using linear regression based on the historical trend of 'Total Income' from that year's data.
+Gross Profit:
+
+This is the forecasted gross profit for that next month, predicted using linear regression based on its historical trend.
+Net Ordinary Income:
+
+This is the forecasted net ordinary income for that next month, predicted using linear regression based on its historical trend.
+
+2. Total Expense:
+
+This is the forecasted total expenses for that next month, predicted using linear regression based on its historical trend.
+Net Other Income:
+
+This is the forecasted net other income for that next month, predicted using linear regression based on its historical trend.
+Expense-to-Income Ratio:
+
+Calculated as: Forecasted Total Expense / Forecasted Total Income for that next month.
+It tells you what proportion of the projected income is expected to be consumed by expenses. A lower ratio is generally better.
+Profit Margin:
+Calculated as: Forecasted Net Ordinary Income / Forecasted Total Income for that next month.
+It indicates the percentage of projected income that is expected to turn into net ordinary profit. A higher margin is generally better.
+Risk Flags:
+
+These are automated alerts based on the forecasted figures. For example:
+    "High Expenses" might appear if the Expense-to-Income Ratio is above a certain threshold (e.g., > 0.8).
+    "Negative Profit" might appear if the Forecasted Net Ordinary Income is less than 0.
+They highlight potential areas of concern in the next month's projected performance.
+Recommendations:
+
+These are very basic, automated suggestions based on the forecasted ratios. For example:
+    "Consider purchase/investment" might appear if the Profit Margin is high and Expense-to-Income Ratio is low.
+    "Review profitability strategy" might appear if the Profit Margin is low.
+These are simplistic and should be taken as very general pointers, not definitive financial advice.
+Assumptions:
+
+This column states the underlying basis for the forecast, which in this script is primarily "Linear growth based on historical monthly data. Ratios based on forecasted values." This reminds you that the projections are derived from a simple linear trend extrapolation.
+In essence, for each year's data you provide, this table gives you a one-month-out lookahead, predicting key financial figures and some basic analytical metrics based on the historical patterns observed in that specific year. It's a "proforma" because it's a projection of future performance.
+
+--------------------------------------------------------------------
+PLOTS
+
+Okay, the application is now generating three types of plots for each successfully processed sheet. These plots are saved in the plots directory. Here's what each one shows:
+
+1. Line Plot: Historical and Projected Financial Metrics (<sheet_name>_line_metrics_<timestamp>.png)
+
+X-axis: Date (showing the historical months from your data).
+Y-axis: Amount (the values of the financial metrics).
+What it shows:
+Historical Trends: For each key financial metric ('Total Income', 'Gross Profit', 'Net Ordinary Income', 'Total Expense', 'Net Other Income'), this plot displays its historical values over time as lines with circular markers (o). This helps you see the past performance and trends (e.g., growth, decline, seasonality) for each metric.
+Next Month's Projection: For each metric, there's a single point marked with an 'X' (connected by a dashed line) representing the forecasted value for the next month after the last historical data point. This is the result of the linear regression model.
+Purpose: To visualize the historical performance of key financial items and see the immediate one-month forecast based on a linear trend.
+
+2. Bar Plot: Projected Financial Ratios (<sheet_name>_bar_ratios_<timestamp>.png)
+
+X-axis: The names of the calculated financial ratios ('Expense-to-Income Ratio', 'Profit Margin').
+Y-axis: The value of these ratios.
+What it shows: This plot displays the values of the 'Expense-to-Income Ratio' and 'Profit Margin' that were calculated based solely on the forecasted values for 'Total Income', 'Total Expense', and 'Net Ordinary Income' for the next month.
+Purpose: To provide a quick visual summary of the projected financial health or efficiency for the upcoming month, based on the forecast.
+
+
+3. Scatter Plot: Actual vs. Predicted Values (Last Historical Month) (<sheet_name>_scatter_actualvspred_<timestamp>.png)
+
+X-axis: The actual historical value of a financial metric for the very last month in your dataset.
+Y-axis: The value for that same metric and same last historical month as predicted by the linear regression model (the model was trained on all historical data, and this plot shows how well it "predicts" the last known point).
+What it shows:
+Each point on the scatter plot represents one of the key financial metrics.
+There's a diagonal dashed red line (y=x). If a point falls directly on this line, it means the model's prediction for the last historical month was perfectly accurate for that metric.
+Points close to this diagonal line indicate that the model's prediction for the most recent historical data point was close to the actual value. Points further away suggest a larger discrepancy for that metric's most recent observation.
+Purpose: This plot gives a visual indication of how well the linear regression model fit the most recent piece of historical data. It's a simple check on the model's performance on the latest known values before making the actual future forecast.
+
+
+These plots collectively aim to give you insights into historical trends, future projections based on those trends, and a glimpse into the model's fit on recent data.
+
